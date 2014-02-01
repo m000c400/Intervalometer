@@ -4,59 +4,48 @@
 #define TRUE 1
 #define FALSE 0
 
-#define REDPIN 13
-#define GREENPIN 12
-#define BLUEPIN 11
+#define STATUSPIN 13
+#define IRPIN 12
 
-long RedDelay = 10000;
-long GreenDelay = 15000;
-long BlueDelay = 20000;
+long Delay = 10000;
+long Exposure = 10000;
 
-long RedOpen = 10000;
-long GreenOpen = 15000;
-long BlueOpen = 20000;
+long TimeClosed = 0;
+long EndDelay = 0;
 
-long RedOpenTime;
-long GreenOpenTime;
-long BlueOpenTime;
+int ExposureAddress = 1;
+int DelayAddress = 10;
 
-long RedCloseTime;
-long GreenCloseTime;
-long BlueCloseTime;
-
-long ExposureStart = 0;
-
-int RedAddress = 10;
-int GreenAddress = 20;
-int BlueAddress = 30;
-
+int CurrentExposure = 0;
+int ExposureCount = 0;
 
 char COMMANDEND = 0x0D;
-
 char CommandBuffer[BUFFERSIZE + 1];
 int BufferUsed= 0;
 
+#define STOP 1
+#define OPEN 2
+#define CLOSE 3
+#define WAIT 4
+
+int Mode = STOP;
+
 void setup() 
 {
-  Serial.begin(9800);
-  pinMode(REDPIN, OUTPUT);
-  pinMode(GREENPIN, OUTPUT);
-  pinMode(BLUEPIN, OUTPUT);
+  Serial.begin(9600);
   
-  digitalWrite(REDPIN, LOW);
-  digitalWrite(GREENPIN, LOW);
-  digitalWrite(BLUEPIN, LOW);
+  Mode = STOP;
 
-  EEPROM_read(RedAddress,&RedDelay); 
-  EEPROM_read(RedAddress+5,&RedOpen);  
+  pinMode(STATUSPIN, OUTPUT);
+  pinMode(IRPIN, OUTPUT);
   
-  EEPROM_read(GreenAddress,&GreenDelay); 
-  EEPROM_read(GreenAddress+5,&GreenOpen);  
+  digitalWrite(STATUSPIN, LOW);
+  digitalWrite(IRPIN, LOW);
   
-  EEPROM_read(BlueAddress,&BlueDelay); 
-  EEPROM_read(BlueAddress+5,&BlueOpen);  
+  EEPROM_read(ExposureAddress,&Exposure);
+  EEPROM_read(DelayAddress,&Delay);
   
-  ExposureInit();
+  Report();
 }
 
 void loop() 
@@ -73,43 +62,32 @@ void loop()
       if (CommandBuffer[BufferUsed] == '\r' )
       {
         CommandBuffer[BufferUsed] = '\0';
-        if(strstr(CommandBuffer,"go"))
+        if(strstr(CommandBuffer,"T"))
         {
-          ExposureInit();
+          CameraSnap(IRPIN);
         }
         else if(strstr(CommandBuffer,"report"))
         {
           Report();
         }
-        else if(strstr(CommandBuffer,"red delay"))
+        else if(strstr(CommandBuffer,"exposure"))
         {
-          ChangeRedDelay(&CommandBuffer[9]);
+          ChangeExposure(&CommandBuffer[9]);
           Report();
         }
-        else if(strstr(CommandBuffer,"green delay"))
+        else if(strstr(CommandBuffer,"delay"))
         {
-          ChangeGreenDelay(&CommandBuffer[11]);
+          ChangeDelay(&CommandBuffer[6]);
           Report();
         }
-        else if(strstr(CommandBuffer,"blue delay"))
+        else if(strstr(CommandBuffer,"count"))
         {
-          ChangeBlueDelay(&CommandBuffer[10]);
+          ChangeCount(&CommandBuffer[5]);
           Report();
         }
-        else if(strstr(CommandBuffer,"red time"))
+        else if(strstr(CommandBuffer,"go"))
         {
-          ChangeRedTime(&CommandBuffer[8]);
-          Report();
-        }
-        else if(strstr(CommandBuffer,"green time"))
-        {
-          ChangeGreenTime(&CommandBuffer[10]);
-          Report();
-        }
-        else if(strstr(CommandBuffer,"blue time"))
-        {
-          ChangeBlueTime(&CommandBuffer[9]);
-          Report();
+          ExposureInit();
         }
         BufferUsed = 0; 
       }
@@ -130,16 +108,19 @@ void loop()
 
 void ExposureInit(void)
 {
-  ExposureStart = millis();
-  
-  RedOpenTime = ExposureStart + RedDelay;
-  GreenOpenTime = ExposureStart + GreenDelay;
-  BlueOpenTime = ExposureStart + BlueDelay;
-  
-  RedCloseTime = ExposureStart + RedDelay + RedOpen;
-  GreenCloseTime = ExposureStart + GreenDelay + GreenOpen;
-  BlueCloseTime = ExposureStart + BlueDelay + BlueOpen;
-  
+  long TimeNow;
+    
+  CurrentExposure = 1;
+  if(CurrentExposure < ExposureCount)
+  {
+    TimeNow = millis();
+    Mode = OPEN;  
+    TimeClosed = TimeNow + Exposure;
+    CameraSnap(IRPIN);
+    digitalWrite(STATUSPIN,HIGH);
+    Serial.print("Exposure "); Serial.print(CurrentExposure);
+    Serial.println(" Shutter Open");
+  }
 }
 
 void RunExposure(void)
@@ -148,125 +129,71 @@ void RunExposure(void)
     
     TimeNow = millis();
     
-    if( (TimeNow > (RedCloseTime+1000)) && (TimeNow > (GreenCloseTime+1000)) && (TimeNow > (BlueCloseTime+1000)))
-    return;
-    
-    Serial.print(TimeNow-ExposureStart);
-    
-    if( (TimeNow > RedOpenTime) && (TimeNow < RedCloseTime))
+    if( (Mode == OPEN) && (TimeNow > TimeClosed))
     {
-      digitalWrite(REDPIN,HIGH);
-      Serial.print("  Red Shutter Open  ");
+        Mode = CLOSE;
+        CameraSnap(IRPIN);
+        digitalWrite(STATUSPIN,LOW);
+        EndDelay = TimeNow + Delay;
+        Serial.print("Exposure "); Serial.print(CurrentExposure);
+       Serial.println(" Shutter Closed");
     }
-    else if ( (TimeNow > RedOpenTime) && (TimeNow > RedCloseTime))
+    if( (Mode == CLOSE) && (TimeNow > EndDelay))
     {
-      digitalWrite(REDPIN, LOW);
-      Serial.print("  Red Shutter Closed");
-    }
-    else
-    {
-      Serial.print("  Red Shutter Closed");
-    }
-    
-    if( (TimeNow > GreenOpenTime) && (TimeNow < GreenCloseTime))
-    {
-      digitalWrite(GREENPIN,HIGH);
-      Serial.print("  Green Shutter Open  ");
-    }
-    else if ( (TimeNow > GreenOpenTime) && (TimeNow > GreenCloseTime))
-    {
-      digitalWrite(GREENPIN, LOW);
-      Serial.print("  Green Shutter Closed");
-    }
-    else
-    {
-      Serial.print("  Green Shutter Closed");
-    }
-    if( (TimeNow > BlueOpenTime) && (TimeNow < BlueCloseTime))
-    {
-      digitalWrite(BLUEPIN,HIGH);
-      Serial.println("  Blue Shutter Open  ");
-    }
-    else if ( (TimeNow > BlueOpenTime) && (TimeNow > BlueCloseTime))
-    {
-      digitalWrite(BLUEPIN, LOW);
-      Serial.println("  Blue Shutter Closed");
-    }
-    else
-    {
-      Serial.println("  Blue Shutter Closed");
+        CurrentExposure++;
+        if(CurrentExposure <= ExposureCount)
+        {
+          Mode = OPEN;  
+          TimeClosed = TimeNow + Exposure;
+          CameraSnap(IRPIN);
+          digitalWrite(STATUSPIN,HIGH);
+          Serial.print("Exposure "); Serial.print(CurrentExposure);
+          Serial.println(" ShutterOpen");
+        }
+        else
+        {
+          Mode = STOP;
+          Serial.println("Finished");
+        }
     }
 }
 
 void Report(void)
 {
-  Serial.println("Channel !  Delay  ! Time ");
-  Serial.println("-------------------------");
-  Serial.print  ("Red     ! ");
-  Serial.print  (RedDelay);
-  Serial.print  (" ! ");
-  Serial.println(RedOpen);
-  Serial.print  ("Green   ! ");
-  Serial.print  (GreenDelay);
-  Serial.print  (" ! ");
-  Serial.println(GreenOpen);
-  Serial.print  ("Blue    ! ");
-  Serial.print  (BlueDelay);
-  Serial.print  (" ! ");
-  Serial.println(BlueOpen);
+  Serial.print  ("Exposure ");
+  Serial.println(Exposure);
+  Serial.print  ("Delay ");
+  Serial.println(Delay);
+  Serial.print  ("Count ");
+  Serial.println(ExposureCount);
 }
 
-void ChangeRedDelay(char * command)
+void ChangeExposure(char *command)
 {
-  long Delay;
+  long _Exposure;
   
-  Delay = atol(command);
-  RedDelay = Delay; 
-  EEPROM_write(RedAddress,RedDelay);
+  //Serial.println(command);
+  
+  _Exposure = atol(command);
+  Exposure = _Exposure; 
+  EEPROM_write(ExposureAddress,Exposure);
 }
 
-void ChangeGreenDelay(char * command)
+void ChangeDelay(char *command)
 {
-  long Delay;
+  long _Delay;
   
-  Delay = atol(command);
-  GreenDelay = Delay; 
-  EEPROM_write(GreenAddress,GreenDelay);
-}
-void ChangeBlueDelay(char * command)
-{
-  long Delay;
-  
-  Delay = atol(command);
-  BlueDelay = Delay;
-  EEPROM_write(BlueAddress,BlueDelay); 
-}  
-
-void ChangeRedTime(char * command)
-{
-  long Delay;
-  
-  Delay = atol(command);
-  RedOpen = Delay; 
-  EEPROM_write(RedAddress+5,RedOpen);
-} 
-
-void ChangeGreenTime(char * command)
-{
-  long Delay;
-  
-  Delay = atol(command);
-  GreenOpen = Delay; 
-  EEPROM_write(GreenAddress+5,GreenOpen);
+  _Delay = atol(command);
+  Delay = _Delay; 
+  EEPROM_write(DelayAddress,Delay);
 }
 
-void ChangeBlueTime(char * command)
+void ChangeCount(char *command)
 {
-  long Delay;
+  long Count;
   
-  Delay = atol(command);
-  BlueOpen = Delay; 
-  EEPROM_write(BlueAddress+5,BlueOpen);
+  Count = atol(command);
+  ExposureCount = Count;
 }  
 
   
@@ -287,5 +214,39 @@ int EEPROM_read(int ee, long *value)
           *p++ = EEPROM.read(ee++);
     return i;
 }  
+
+
+
+// This 39kHz loop from http://zovirl.com/2008/11/12/building-a-universal-remote-with-an-arduino
+/* Modulate pin at 39 kHz for give number of microseconds */
+void on(int pin, int time) 
+{
+  static const int period = 25;
+  // found wait_time by measuring with oscilloscope
+  static const int wait_time = 9;  
+
+  for (time = time/period; time > 0; time--) {
+    digitalWrite(pin, HIGH);
+    delayMicroseconds(wait_time);
+    digitalWrite(pin, LOW);
+    delayMicroseconds(wait_time);
+  }
+}
+
+
+void CameraSnap(int pin)
+{
+// These Timing are from: http://www.bigmike.it/ircontrol/
+on(pin,2000);
+//This Delay is broken into 3 lines because the delayMicroseconds() is only accurate to 16383. http://arduino.cc/en/Reference/DelayMicroseconds
+delayMicroseconds(7830);
+delayMicroseconds(10000);
+delayMicroseconds(10000);
+on(pin,390);
+delayMicroseconds(1580);
+on(pin,410);
+delayMicroseconds(3580);
+on(pin,400);
+}
 
 
